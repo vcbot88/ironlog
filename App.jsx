@@ -139,7 +139,7 @@ const DEFAULT_EXERCISES = {
   Core:["Prancha","Abdominal","Abdominal Oblíquo","Elevação de Pernas","Russian Twist","Dead Bug","Ab Wheel"],
   "Full Body":["Levantamento Terra","Clean","Snatch","Burpee","Thruster","Kettlebell Swing"],
 };
-const EMPTY_DATA = { workouts:[], bodyWeight:[], personalRecords:{}, maxLoads:{}, savedLists:[] };
+const EMPTY_DATA = { workouts:[], bodyWeight:[], nutrition:[], personalRecords:{}, maxLoads:{}, savedLists:[] };
 
 function getStorage() {
   try { return { ...EMPTY_DATA, ...JSON.parse(localStorage.getItem("ironlog_v2") || "{}") }; }
@@ -248,6 +248,70 @@ function SparkLine({data,color="#f97316",height=52}){
       <circle cx={px(data.length-1)} cy={py(last.value)} r="5" fill={color}/>
       <text x={px(data.length-1)} y={py(last.value)-10} fill={color} fontSize="11" fontWeight="700" textAnchor="middle">{last.value.toFixed(1)}</text>
     </svg>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DUAL SPARKLINE — cruza duas séries normalizadas (volume vs peso)
+// ═══════════════════════════════════════════════════════════════════════════════
+function DualSparkLine({a,b,colorA="#f97316",colorB="#06b6d4",height=64}){
+  if(!a||!b||a.length<2||b.length<2)
+    return <div style={{height,display:"flex",alignItems:"center",justifyContent:"center",color:"#444",fontSize:12,textAlign:"center",padding:"0 10px"}}>Registre peso e treinos por pelo menos 2 semanas para ver o cruzamento</div>;
+  const W=300,H=height;
+  const norm=(arr)=>{const vs=arr.map(d=>d.value),min=Math.min(...vs),max=Math.max(...vs),r=max-min||1;return arr.map((d,i)=>({x:(i/(arr.length-1))*W,y:H-((d.value-min)/r)*(H-12)-6}));};
+  const pa=norm(a),pb=norm(b);
+  return(
+    <svg viewBox={`0 0 ${W} ${H}`} style={{width:"100%",height,display:"block"}}>
+      <polyline points={pb.map(p=>`${p.x},${p.y}`).join(" ")} fill="none" stroke={colorB} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" strokeDasharray="4 3" opacity=".9"/>
+      <polyline points={pa.map(p=>`${p.x},${p.y}`).join(" ")} fill="none" stroke={colorA} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round"/>
+      <circle cx={pa[pa.length-1].x} cy={pa[pa.length-1].y} r="4" fill={colorA}/>
+      <circle cx={pb[pb.length-1].x} cy={pb[pb.length-1].y} r="4" fill={colorB}/>
+    </svg>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// QUICK LOG MODAL — peso corporal + kcal do dia
+// ═══════════════════════════════════════════════════════════════════════════════
+function QuickLogModal({data,setData,onClose}){
+  const lastBW=[...data.bodyWeight].sort((x,y)=>new Date(y.date)-new Date(x.date))[0];
+  const todayKcal=(data.nutrition||[]).find(n=>n.date===today());
+  const[w,setW]=useState(lastBW?String(lastBW.weight):"");
+  const[k,setK]=useState(todayKcal?String(todayKcal.kcal):"");
+  const[saved,setSaved]=useState(false);
+  const save=()=>{
+    setData(d=>{
+      let next={...d};
+      if(w&&parseFloat(w)>0) next.bodyWeight=[...d.bodyWeight.filter(b=>b.date!==today()),{date:today(),weight:parseFloat(w)}];
+      if(k&&parseInt(k)>0) next.nutrition=[...(d.nutrition||[]).filter(n=>n.date!==today()),{date:today(),kcal:parseInt(k)}];
+      return next;
+    });
+    setSaved(true);
+    setTimeout(onClose,800);
+  };
+  return(
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-card" onClick={e=>e.stopPropagation()}>
+        <div className="modal-header">
+          <div className="modal-title">Registro de Hoje</div>
+          <button className="icon-btn" onClick={onClose}><I n="close" s={16}/></button>
+        </div>
+        <div className="ql-fields">
+          <div className="ql-field">
+            <label>⚖️ Peso corporal (kg)</label>
+            <input className="text-input" type="number" step="0.1" inputMode="decimal" value={w} onChange={e=>setW(e.target.value)} placeholder={lastBW?`Último: ${lastBW.weight} kg`:"Ex: 80.5"}/>
+          </div>
+          <div className="ql-field">
+            <label>🍽️ Calorias consumidas (kcal)</label>
+            <input className="text-input" type="number" inputMode="numeric" value={k} onChange={e=>setK(e.target.value)} placeholder="Ex: 2400"/>
+          </div>
+        </div>
+        <div className="ql-hint">Registre diariamente para cruzar volume de treino × peso corporal na aba Evolução.</div>
+        <button className={`cta-btn${saved?" success":""}`} onClick={save} disabled={!w&&!k}>
+          {saved?<><I n="check" s={18}/> SALVO!</>:<><I n="save" s={18}/> SALVAR REGISTRO</>}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -374,6 +438,8 @@ function ExerciseMediaModal({exName,onClose}){
 // HOME TAB
 // ═══════════════════════════════════════════════════════════════════════════════
 function HomeTab({data,setTab,setData}){
+  const[showQuickLog,setShowQuickLog]=useState(false);
+  const todayLogged=data.bodyWeight.some(b=>b.date===today())&&(data.nutrition||[]).some(n=>n.date===today());
   const recent=[...data.workouts].sort((a,b)=>new Date(b.date)-new Date(a.date)).slice(0,4);
   const streak=calcStreak(data.workouts);
   const weekVol=data.workouts.filter(w=>new Date(w.date)>=new Date(Date.now()-7*86400000)).reduce((s,w)=>s+w.exercises.reduce((s2,ex)=>s2+calcVolume(ex.sets),0),0);
@@ -382,6 +448,7 @@ function HomeTab({data,setTab,setData}){
     <div className="tab-content">
       <div className="hero-header">
         <div>
+          <div className="hero-eyebrow">Força · Hipertrofia · Endurance</div>
           <div className="hero-greeting">IRON LOG</div>
           <div className="hero-sub">{new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"numeric",month:"long"})}</div>
         </div>
@@ -421,12 +488,23 @@ function HomeTab({data,setTab,setData}){
       })()}
       <div className="home-actions">
         <button className="home-action-btn" onClick={()=>setTab("templates")}><I n="template" s={20}/><span>Programas</span></button>
-        <button className="home-action-btn" onClick={()=>setTab("lists")}><I n="list" s={20}/><span>Minhas Listas</span></button>
+        <button className="home-action-btn" onClick={()=>setTab("lists")}><I n="list" s={20}/><span>Meus Treinos</span></button>
       </div>
       <div className="home-actions" style={{marginTop:-4}}>
         <button className="home-action-btn hiit-home-btn" onClick={()=>setTab("hiit")}><I n="flame" s={20}/><span>HIIT</span></button>
         <button className="home-action-btn" onClick={()=>setTab("progress")}><I n="chart" s={20}/><span>Evolução</span></button>
       </div>
+
+      {/* Quick log peso + kcal */}
+      <button className={`quicklog-btn${todayLogged?" logged":""}`} onClick={()=>setShowQuickLog(true)}>
+        <span className="quicklog-icon">{todayLogged?"✅":"⚖️"}</span>
+        <div className="quicklog-text">
+          <div className="quicklog-title">{todayLogged?"Peso & Kcal registrados hoje":"Registrar Peso & Kcal de hoje"}</div>
+          <div className="quicklog-sub">{todayLogged?"Toque para editar":"Cruze seus dados com a evolução dos treinos"}</div>
+        </div>
+        <span className="quicklog-arrow">→</span>
+      </button>
+      {showQuickLog&&<QuickLogModal data={data} setData={setData} onClose={()=>setShowQuickLog(false)}/>}
       {recent.length>0&&(
         <div className="section">
           <div className="section-title">Histórico Recente</div>
@@ -436,10 +514,14 @@ function HomeTab({data,setTab,setData}){
         </div>
       )}
       {!recent.length&&(
-        <div className="empty-state">
-          <div className="empty-icon"><I n="dumbbell" s={44}/></div>
-          <div className="empty-title">Sem treinos ainda</div>
-          <div className="empty-sub">Comece agora ou escolha um programa!</div>
+        <div className="welcome-card">
+          <div className="welcome-title">Seu centro de treino completo</div>
+          <div className="welcome-pillars">
+            <div className="wp-item"><span className="wp-icon">🏋️</span><div><div className="wp-name">Força & Hipertrofia</div><div className="wp-desc">PRs, 1RM estimado e progressão de carga automática</div></div></div>
+            <div className="wp-item"><span className="wp-icon">🔥</span><div><div className="wp-name">HIIT & Endurance</div><div className="wp-desc">Corrida, bike, natação e remo com zonas de BPM via smartwatch</div></div></div>
+            <div className="wp-item"><span className="wp-icon">🎙️</span><div><div className="wp-name">Iron AI</div><div className="wp-desc">Registre séries por voz e importe planilhas de treino</div></div></div>
+          </div>
+          <div className="welcome-hint">Toque em <strong>Iniciar Treino</strong> para começar</div>
         </div>
       )}
     </div>
@@ -551,7 +633,7 @@ function ListsTab({data,setData,setTab,setNewWorkoutFromList}){
 
   if(creating){return(
     <div className="tab-content">
-      <button className="back-btn" onClick={()=>{setCreating(false);setPicked([]);}}>← Minhas Listas</button>
+      <button className="back-btn" onClick={()=>{setCreating(false);setPicked([]);}}>← Meus Treinos</button>
       <div className="page-title">Nova Lista</div>
       <input className="text-input" value={listName} onChange={e=>setListName(e.target.value)} placeholder="Nome da lista..." style={{marginBottom:14}}/>
       <div className="group-tabs">{MUSCLE_GROUPS.map(g=><button key={g} className={`group-tab${selGroup===g?" active":""}`} onClick={()=>setSelGroup(g)}>{g}</button>)}</div>
@@ -563,9 +645,9 @@ function ListsTab({data,setData,setTab,setNewWorkoutFromList}){
   );}
   return(
     <div className="tab-content">
-      <div className="page-title">Minhas Listas</div>
+      <div className="page-title">Meus Treinos</div>
       <button className="add-ex-btn" onClick={()=>setCreating(true)}><I n="plus" s={18}/> Criar Nova Lista</button>
-      {(!data.savedLists||!data.savedLists.length)?<div className="empty-state"><div className="empty-icon"><I n="list" s={40}/></div><div className="empty-title">Sem listas salvas</div></div>:
+      {(!data.savedLists||!data.savedLists.length)?<div className="empty-state"><div className="empty-icon"><I n="list" s={40}/></div><div className="empty-title">Sem treinos salvos</div></div>:
         data.savedLists.map(list=>(
           <div key={list.id} className="list-card">
             <div className="list-card-header"><div><div className="list-card-name">{list.name}</div>{list.source&&<div className="list-card-source">{list.source}</div>}</div><button className="icon-btn danger" onClick={()=>setData(d=>({...d,savedLists:d.savedLists.filter(l=>l.id!==list.id)}))}><I n="trash" s={14}/></button></div>
@@ -634,7 +716,7 @@ function NewWorkoutTab({data,setData,setTab,templateInit,clearTemplate}){
   const[saved,setSaved]=useState(false);
   const[showNudge,setShowNudge]=useState(false);
   const[restTimer,setRestTimer]=useState(null);
-  const[restSeconds,setRestSeconds]=useState(90);
+  const[restSeconds,setRestSeconds]=useState(()=>{const s=parseInt(localStorage.getItem("ironlog_rest_seconds"));return [60,90,120,180,240].includes(s)?s:90;});
   const[mediaModal,setMediaModal]=useState(null);
 
   const addExercise=n=>{const lw=data.maxLoads[n]?.weight||"";setExercises(p=>[...p,{name:n,sets:[{weight:String(lw),reps:"",done:false}],note:""}]);setShowAddEx(false);};
@@ -662,7 +744,7 @@ function NewWorkoutTab({data,setData,setTab,templateInit,clearTemplate}){
       {mediaModal&&<ExerciseMediaModal exName={mediaModal} onClose={()=>setMediaModal(null)}/>}
       {showNudge&&<HIITNudgeModal onGoHIIT={()=>{setShowNudge(false);setTab("hiit");}} onDismiss={()=>{setShowNudge(false);setTab("home");}}/>}
       <div className="page-title">Novo Treino</div>
-      <div className="rest-config"><I n="clock" s={14}/><span>Descanso:</span>{[60,90,120,180,240].map(s=><button key={s} className={`rest-preset${restSeconds===s?" active":""}`} onClick={()=>setRestSeconds(s)}>{s>=60?`${s/60}min`:`${s}s`}</button>)}</div>
+      <div className="rest-config"><I n="clock" s={14}/><span>Descanso:</span>{[60,90,120,180,240].map(s=><button key={s} className={`rest-preset${restSeconds===s?" active":""}`} onClick={()=>{setRestSeconds(s);localStorage.setItem("ironlog_rest_seconds",String(s));}}>{s>=60?`${s/60}min`:`${s}s`}</button>)}</div>
       <div className="field-group" style={{marginTop:10}}>
         <input className="text-input" value={name} onChange={e=>setName(e.target.value)} placeholder="Nome do treino"/>
         <input className="text-input" type="date" value={date} onChange={e=>setDate(e.target.value)}/>
@@ -713,7 +795,7 @@ function NewWorkoutTab({data,setData,setTab,templateInit,clearTemplate}){
           <div className="add-ex-panel-title">Adicionar Exercício</div>
           {data.savedLists&&data.savedLists.length>0&&(
             <div className="quick-lists">
-              <div className="section-title" style={{marginBottom:8}}>Das Minhas Listas</div>
+              <div className="section-title" style={{marginBottom:8}}>Dos Meus Treinos</div>
               {data.savedLists.map(list=>(
                 <div key={list.id} className="quick-list-row"><span className="quick-list-name">{list.name}</span><div className="quick-list-exs">{list.exercises.map(ex=><button key={ex} className="ex-option" onClick={()=>addExercise(ex)}>{ex}</button>)}</div></div>
               ))}
@@ -740,21 +822,61 @@ function ProgressTab({data,setData}){
   const[selEx,setSelEx]=useState("");
   const[bwInput,setBwInput]=useState("");
   const[bwDate,setBwDate]=useState(today());
+  const[kcalInput,setKcalInput]=useState("");
+  const[kcalDate,setKcalDate]=useState(today());
   const[chartMode,setChartMode]=useState("e1rm");
   const allEx=[...new Set(data.workouts.flatMap(w=>w.exercises.map(e=>e.name)))].sort();
   const chartData=selEx?data.workouts.filter(w=>w.exercises.some(e=>e.name===selEx)).sort((a,b)=>new Date(a.date)-new Date(b.date)).map(w=>{const ex=w.exercises.find(e=>e.name===selEx);const vs=ex.sets.filter(s=>s.weight&&s.reps);if(!vs.length)return null;return{label:fmtDate(w.date),e1rm:Math.max(...vs.map(s=>e1rm(parseFloat(s.weight),parseInt(s.reps)))),volume:calcVolume(ex.sets),weight:Math.max(...ex.sets.filter(s=>s.weight).map(s=>parseFloat(s.weight)))};}).filter(Boolean):[];
   const bwData=[...data.bodyWeight].sort((a,b)=>new Date(a.date)-new Date(b.date)).map(b=>({label:fmtDate(b.date),value:b.weight}));
+  const kcalData=[...(data.nutrition||[])].sort((a,b)=>new Date(a.date)-new Date(b.date)).map(n=>({label:fmtDate(n.date),value:n.kcal}));
   const weekMap={};data.workouts.forEach(w=>{const d=new Date(w.date+"T00:00:00"),mon=new Date(d);mon.setDate(d.getDate()-(d.getDay()||7)+1);const k=mon.toISOString().split("T")[0];weekMap[k]=(weekMap[k]||0)+w.exercises.reduce((s,ex)=>s+calcVolume(ex.sets),0);});
   const weekData=Object.entries(weekMap).sort(([a],[b])=>a>b?1:-1).slice(-8).map(([k,v])=>({label:fmtDate(k),value:v}));
   const curBW=bwData.length?bwData[bwData.length-1].value:null,prevBW=bwData.length>1?bwData[bwData.length-2].value:null;
+  const kcal7=kcalData.slice(-7);
+  const kcalAvg=kcal7.length?Math.round(kcal7.reduce((s,x)=>s+x.value,0)/kcal7.length):null;
+
+  // Cross data: weekly volume vs weekly avg body weight (last 8 weeks)
+  const bwWeekMap={};data.bodyWeight.forEach(b=>{const d=new Date(b.date+"T00:00:00"),mon=new Date(d);mon.setDate(d.getDate()-(d.getDay()||7)+1);const k=mon.toISOString().split("T")[0];if(!bwWeekMap[k])bwWeekMap[k]=[];bwWeekMap[k].push(b.weight);});
+  const crossKeys=Object.keys(weekMap).filter(k=>bwWeekMap[k]).sort().slice(-8);
+  const crossVol=crossKeys.map(k=>({label:fmtDate(k),value:weekMap[k]}));
+  const crossBW=crossKeys.map(k=>({label:fmtDate(k),value:bwWeekMap[k].reduce((s,x)=>s+x,0)/bwWeekMap[k].length}));
+  const crossInsight=(()=>{
+    if(crossVol.length<2)return null;
+    const volUp=crossVol[crossVol.length-1].value>crossVol[0].value;
+    const bwDelta=crossBW[crossBW.length-1].value-crossBW[0].value;
+    if(volUp&&bwDelta<-0.3)return{icon:"🔥",text:`Volume subindo e peso caindo ${Math.abs(bwDelta).toFixed(1)}kg — recomposição corporal em andamento!`};
+    if(volUp&&bwDelta>0.3)return{icon:"💪",text:`Volume e peso subindo +${bwDelta.toFixed(1)}kg — fase de ganho de massa.`};
+    if(!volUp&&bwDelta<-0.3)return{icon:"⚠️",text:`Peso caindo ${Math.abs(bwDelta).toFixed(1)}kg com volume em queda — atenção à perda de massa magra.`};
+    return{icon:"📊",text:"Peso estável no período — ajuste calorias conforme seu objetivo."};
+  })();
+
   return(
     <div className="tab-content">
       <div className="page-title">Evolução</div>
       <div className="card">
         <div className="card-header"><I n="weight" s={15}/> Peso Corporal{curBW&&<span className="card-badge">{curBW} kg {prevBW?((curBW-prevBW)>0?"+":"")+(curBW-prevBW).toFixed(1)+" kg":""}</span>}</div>
         <SparkLine data={bwData} color="#06b6d4"/>
-        <div className="bw-row"><input className="text-input flex1" type="number" step="0.1" value={bwInput} onChange={e=>setBwInput(e.target.value)} placeholder="Peso (kg)"/><input className="text-input" style={{width:130}} type="date" value={bwDate} onChange={e=>setBwDate(e.target.value)}/><button className="icon-btn accent" onClick={()=>{if(!bwInput)return;setData(d=>({...d,bodyWeight:[...d.bodyWeight.filter(b=>b.date!==bwDate),{date:bwDate,weight:parseFloat(bwInput)}]}));setBwInput("");}}><I n="plus" s={16}/></button></div>
+        <div className="bw-row"><input className="text-input flex1" type="number" step="0.1" inputMode="decimal" value={bwInput} onChange={e=>setBwInput(e.target.value)} placeholder="Peso (kg)"/><input className="text-input" style={{width:130}} type="date" value={bwDate} onChange={e=>setBwDate(e.target.value)}/><button className="icon-btn accent" onClick={()=>{if(!bwInput)return;setData(d=>({...d,bodyWeight:[...d.bodyWeight.filter(b=>b.date!==bwDate),{date:bwDate,weight:parseFloat(bwInput)}]}));setBwInput("");}}><I n="plus" s={16}/></button></div>
       </div>
+
+      {/* KCAL */}
+      <div className="card">
+        <div className="card-header">🍽️ Calorias Diárias{kcalAvg&&<span className="card-badge">média 7d: {kcalAvg} kcal</span>}</div>
+        <SparkLine data={kcalData} color="#fbbf24"/>
+        <div className="bw-row"><input className="text-input flex1" type="number" inputMode="numeric" value={kcalInput} onChange={e=>setKcalInput(e.target.value)} placeholder="Kcal do dia"/><input className="text-input" style={{width:130}} type="date" value={kcalDate} onChange={e=>setKcalDate(e.target.value)}/><button className="icon-btn accent" onClick={()=>{if(!kcalInput)return;setData(d=>({...d,nutrition:[...(d.nutrition||[]).filter(n=>n.date!==kcalDate),{date:kcalDate,kcal:parseInt(kcalInput)}]}));setKcalInput("");}}><I n="plus" s={16}/></button></div>
+      </div>
+
+      {/* CROSS DATA: volume vs body weight */}
+      <div className="card cross-card">
+        <div className="card-header"><I n="bolt" s={15}/> Treino × Peso Corporal</div>
+        <div className="cross-legend">
+          <span className="cl-item"><span className="cl-dot" style={{background:"#f97316"}}/>Volume semanal</span>
+          <span className="cl-item"><span className="cl-dot dashed" style={{borderColor:"#06b6d4"}}/>Peso corporal</span>
+        </div>
+        <DualSparkLine a={crossVol} b={crossBW}/>
+        {crossInsight&&<div className="cross-insight"><span>{crossInsight.icon}</span>{crossInsight.text}</div>}
+      </div>
+
       <div className="card">
         <div className="card-header"><I n="chart" s={15}/> Progresso por Exercício</div>
         <select className="text-input" value={selEx} onChange={e=>setSelEx(e.target.value)}><option value="">Selecione um exercício...</option>{allEx.map(ex=>{const ml=data.maxLoads[ex];return <option key={ex} value={ex}>{ex}{ml?` (máx ${ml.weight}kg)`:""}</option>;})}</select>
@@ -806,9 +928,12 @@ function RecordsTab({data}){
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const QUICK_CMDS = [
-  "Qual meu recorde no supino?","Registra supino 100kg 5 reps",
-  "Inicia treino de perna","Muda descanso pra 2 minutos",
-  "Que exercícios faço hoje?","Quanto falta pra bater meu PR?",
+  "📎 Importar planilha de treino",
+  "Qual meu recorde no supino?",
+  "Registra supino 100kg 5 reps",
+  "Inicia treino de perna",
+  "Muda descanso pra 2 minutos",
+  "Quanto falta pra bater meu PR?",
 ];
 
 function buildAIPrompt(appData, currentWorkout) {
@@ -838,15 +963,23 @@ AÇÕES DISPONÍVEIS:
 - START_WORKOUT: {type:"START_WORKOUT", name, exercises:[...]}
 - QUERY_PR: {type:"QUERY_PR", exercise}
 - SET_REST: {type:"SET_REST", seconds}
+- IMPORT_WORKOUT: {type:"IMPORT_WORKOUT", name:"Nome do treino", exercises:["Exercício 1","Exercício 2",...]}
 - null: só resposta de texto
+
+REGRAS PARA IMPORTAÇÃO DE PLANILHA/PDF/TEXTO:
+- Quando o usuário enviar conteúdo de planilha, PDF ou texto com exercícios, identifique TODOS os exercícios listados
+- Agrupe por dia se houver divisão (ex: Treino A, Treino B, Segunda, Terça, etc)
+- Para cada grupo, retorne uma ação IMPORT_WORKOUT separada
+- Normalize os nomes dos exercícios para português (ex: "Bench Press" → "Supino Reto")
+- Se houver séries/reps, inclua no campo exercises como "Exercício (4x10)"
+- Se houver múltiplos dias, responda explicando quantos treinos foram encontrados e aplique o primeiro, pedindo confirmação para os demais
 
 FORMATO OBRIGATÓRIO:
 {"response":"frase curta motivacional em português (máx 2 frases)","action":{...} ou null}
 
 EXEMPLOS:
 "Registra supino 100kg 8 reps" → {"response":"100kg por 8 no supino! Anotado!","action":{"type":"ADD_SET","exercise":"Supino Reto","weight":100,"reps":8}}
-"Qual meu recorde no agachamento" → {"response":"Seu agachamento está em X kg estimado!","action":{"type":"QUERY_PR","exercise":"Agachamento"}}
-"Falta quanto pro PR?" → {"response":"Analise os dados e responda motivado","action":null}
+"[conteúdo de planilha com exercícios]" → {"response":"Encontrei 3 exercícios no seu treino A! Salvando em Meus Treinos.","action":{"type":"IMPORT_WORKOUT","name":"Treino A","exercises":["Supino Reto","Remada Curvada","Agachamento"]}}
 Seja direto, use linguagem de academia.`;
 }
 
@@ -863,7 +996,7 @@ function Waveform({active,analyzing}){
 
 function AIActionCard({action,onApply,applied}){
   if(!action)return null;
-  const labels={ADD_SET:{icon:"dumbbell",color:"#f97316",label:"Adicionar Série"},START_WORKOUT:{icon:"bolt",color:"#22c55e",label:"Iniciar Treino"},QUERY_PR:{icon:"trophy",color:"#fbbf24",label:"Consulta PR"},SET_REST:{icon:"clock",color:"#06b6d4",label:"Ajustar Descanso"},COMPLETE_SET:{icon:"check",color:"#a78bfa",label:"Completar Série"}};
+  const labels={ADD_SET:{icon:"dumbbell",color:"#f97316",label:"Adicionar Série"},START_WORKOUT:{icon:"bolt",color:"#22c55e",label:"Iniciar Treino"},QUERY_PR:{icon:"trophy",color:"#fbbf24",label:"Consulta PR"},SET_REST:{icon:"clock",color:"#06b6d4",label:"Ajustar Descanso"},COMPLETE_SET:{icon:"check",color:"#a78bfa",label:"Completar Série"},IMPORT_WORKOUT:{icon:"save",color:"#22c55e",label:"Importar para Meus Treinos"}};
   const meta=labels[action.type]||{icon:"bolt",color:"#888",label:action.type};
   return(
     <div className="ac-card" style={{"--acc":meta.color}}>
@@ -873,6 +1006,7 @@ function AIActionCard({action,onApply,applied}){
         {action.type==="START_WORKOUT"&&<><strong>{action.name}</strong>: {action.exercises?.join(", ")}</>}
         {action.type==="QUERY_PR"&&<>PR de <strong>{action.exercise}</strong></>}
         {action.type==="SET_REST"&&<>Descanso: <strong>{action.seconds}s</strong></>}
+        {action.type==="IMPORT_WORKOUT"&&<><strong>{action.name}</strong>: {action.exercises?.join(", ")}</>}
       </div>
       {!applied&&action.type!=="QUERY_PR"&&<button className="ac-apply" onClick={()=>onApply(action)}>Aplicar no treino →</button>}
     </div>
@@ -888,7 +1022,9 @@ function IronAITab({data, setData, setTab, setTemplateInit}){
   const[transcript,setTranscript]=useState("");
   const[applied,setApplied]=useState(new Set());
   const[micPerm,setMicPerm]=useState("unknown");
-  const[aiWorkout,setAiWorkout]=useState(null); // workout being built by voice
+  const[aiWorkout,setAiWorkout]=useState(null);
+  const[fileLoading,setFileLoading]=useState(false);
+  const fileInputRef=useRef(null); // workout being built by voice
 
   const recogRef=useRef(null),synthRef=useRef(window.speechSynthesis),endRef=useRef(null);
   const msgId=useRef(1),finalRef=useRef(""),sendRef=useRef(null);
@@ -931,6 +1067,13 @@ function IronAITab({data, setData, setTab, setTemplateInit}){
       setTemplateInit({name:nw.name,exercises:(action.exercises||[]).map(n=>({name:n,sets:3,reps:10,note:""}))});
     } else if(action.type==="SET_REST"){
       localStorage.setItem("ironlog_rest_seconds",String(action.seconds));
+    } else if(action.type==="IMPORT_WORKOUT"){
+      // Save to "Meus Treinos" (savedLists)
+      const exercises = (action.exercises||[]).map(e=>e.replace(/\s*\([\dx×\s]+\)\s*$/,"").trim()).filter(Boolean);
+      const newList = { id:Date.now(), name:action.name||"Treino Importado", exercises, source:"Importado via IA" };
+      const d=getStorage();
+      d.savedLists=[...(d.savedLists||[]),newList];
+      setData(_=>({...d}));setStorage(d);
     }
     setApplied(p=>new Set([...p,mid]));
   },[aiWorkout,setData,setTemplateInit]);
@@ -972,6 +1115,63 @@ function IronAITab({data, setData, setTab, setTemplateInit}){
 
   const stopListening=useCallback(()=>{if(!recogRef.current)return;try{recogRef.current.stop();}catch{};},[]);
 
+  // File upload handler — reads PDF/image via Anthropic API, text/csv locally
+  const handleFileUpload=useCallback(async(e)=>{
+    const file=e.target.files?.[0];
+    if(!file)return;
+    e.target.value="";
+    setFileLoading(true);
+    const uid=msgId.current++;
+    const ext=file.name.split(".").pop().toLowerCase();
+    setMessages(p=>[...p,{id:uid,role:"user",text:`📎 Arquivo enviado: ${file.name}`,time:new Date().toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})}]);
+
+    try{
+      let messages_payload=[];
+
+      if(ext==="pdf"||ext==="jpg"||ext==="jpeg"||ext==="png"||ext==="webp"){
+        // Use Anthropic vision/document API
+        const base64=await new Promise((res,rej)=>{
+          const r=new FileReader();
+          r.onload=()=>res(r.result.split(",")[1]);
+          r.onerror=rej;
+          r.readAsDataURL(file);
+        });
+        const mediaType=ext==="pdf"?"application/pdf":`image/${ext==="jpg"?"jpeg":ext}`;
+        messages_payload=[{role:"user",content:[
+          ext==="pdf"
+            ?{type:"document",source:{type:"base64",media_type:mediaType,data:base64}}
+            :{type:"image",source:{type:"base64",media_type:mediaType,data:base64}},
+          {type:"text",text:"Este arquivo contém uma planilha ou lista de treinos. Extraia TODOS os exercícios e divida por dia/grupo muscular se houver. Responda no formato JSON solicitado com ação IMPORT_WORKOUT para cada dia encontrado. Comece pelo primeiro dia."}
+        ]}];
+      } else {
+        // Text / CSV / XLSX as text
+        const text=await file.text();
+        messages_payload=[{role:"user",content:`Conteúdo do arquivo "${file.name}":\n\n${text.slice(0,8000)}\n\nExtraia os exercícios e importe para Meus Treinos.`}];
+      }
+
+      const r=await fetch("https://api.anthropic.com/v1/messages",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          model:"claude-sonnet-4-20250514",
+          max_tokens:1500,
+          system:buildAIPrompt(data,aiWorkout),
+          messages:messages_payload
+        })
+      });
+      const rd=await r.json();
+      const raw=rd.content?.[0]?.text||"{}";
+      let parsed={};
+      try{parsed=JSON.parse(raw.replace(/```json|```/g,"").trim());}catch{parsed={response:raw,action:null};}
+      const aid=msgId.current++;
+      setMessages(p=>[...p,{id:aid,role:"ai",text:parsed.response||"Arquivo processado!",action:parsed.action||null,onApply:ac=>applyAction(ac,aid),time:new Date().toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})}]);
+      speak(parsed.response||"Arquivo processado!");
+      if(parsed.action?.type==="IMPORT_WORKOUT"){ applyAction(parsed.action,aid); setApplied(p=>new Set([...p,aid])); }
+    }catch(err){
+      setMessages(p=>[...p,{id:msgId.current++,role:"ai",text:"⚠️ Erro ao processar arquivo. Tente um PDF, imagem ou arquivo de texto.",time:new Date().toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})}]);
+    }finally{setFileLoading(false);}
+  },[data,aiWorkout,applyAction,speak]);
+
   const activeSets=aiWorkout?.exercises?.reduce((s,e)=>s+e.sets.filter(x=>x.weight).length,0)||0;
 
   return(
@@ -982,7 +1182,7 @@ function IronAITab({data, setData, setTab, setTemplateInit}){
           <div className="ai-logo">IA</div>
           <div>
             <div className="ai-title">IRON AI</div>
-            <div className="ai-sub">Assistente de treino por voz</div>
+            <div className="ai-sub">Voz · Texto · Planilha · PDF</div>
           </div>
         </div>
         <div className="ai-status-col">
@@ -1016,16 +1216,20 @@ function IronAITab({data, setData, setTab, setTemplateInit}){
       </div>
 
       {/* Quick commands */}
-      <div className="ai-quick">{QUICK_CMDS.map((c,i)=><button key={i} className="ai-quick-btn" onClick={()=>sendMessage(c)}>{c}</button>)}</div>
+      <div className="ai-quick">{QUICK_CMDS.map((c,i)=><button key={i} className={`ai-quick-btn${c.startsWith("📎")?" ai-quick-import":""}`} onClick={()=>c.startsWith("📎")?fileInputRef.current?.click():sendMessage(c)}>{c}</button>)}</div>
 
       {/* Waveform */}
       <div className="ai-wave-row"><Waveform active={listening||speaking} analyzing={analyzing}/><div className="ai-wave-hint">{listening?"Ouvindo… toque para parar":analyzing?"Processando…":speaking?"Respondendo…":"Toque no mic ou digite"}</div></div>
 
       {/* Input */}
       <div className="ai-input-row">
-        <input className="ai-input" value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendMessage(input)} placeholder="Ou digite aqui..." disabled={listening||analyzing}/>
+        <input ref={fileInputRef} type="file" accept=".pdf,.jpg,.jpeg,.png,.webp,.csv,.txt,.xlsx,.xls" style={{display:"none"}} onChange={handleFileUpload}/>
+        <button className={`ai-file-btn${fileLoading?" busy":""}`} onClick={()=>fileInputRef.current?.click()} disabled={fileLoading||analyzing} title="Importar planilha ou PDF de treino">
+          {fileLoading ? <div className="ai-file-spin"/> : <I n="save" s={17}/>}
+        </button>
+        <input className="ai-input" value={input} onChange={e=>setInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendMessage(input)} placeholder="Voz, texto ou envie planilha..." disabled={listening||analyzing||fileLoading}/>
         <button className={`ai-send${input.trim()?" ready":""}`} onClick={()=>sendMessage(input)} disabled={!input.trim()||analyzing}><I n="send" s={17}/></button>
-        <button className={`ai-mic${listening?" on":""}${analyzing?" busy":""}`} onClick={()=>listening?stopListening():startListening()} disabled={analyzing}>
+        <button className={`ai-mic${listening?" on":""}${analyzing?" busy":""}`} onClick={()=>listening?stopListening():startListening()} disabled={analyzing||fileLoading}>
           <I n={listening?"micOff":"mic"} s={22}/>
           {listening&&<span className="mic-ring"/>}
         </button>
@@ -1472,6 +1676,7 @@ function HIITTab({ data, setData }) {
     <div className="tab-content">
       {showBpm && <BpmCalculator onClose={() => setShowBpm(false)}/>}
       <div className="page-title">HIIT</div>
+      <div className="tpl-subtitle">Condicionamento para musculação, corrida e triatlo — protocolos validados por ciência.</div>
 
       {/* HR badge always visible */}
       <div style={{marginBottom:12}}>
@@ -1573,33 +1778,73 @@ const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@300;400;500;600;700&display=swap');
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 :root{
-  --bg:#080808;--bg2:#111;--bg3:#181818;--bg4:#1f1f1f;
-  --border:#232323;--border2:#2e2e2e;
-  --text:#f0f0f0;--muted:#585858;--muted2:#888;
+  --bg:#060606;--bg2:#101010;--bg3:#181818;--bg4:#202020;
+  --border:#222;--border2:#2e2e2e;
+  --text:#f2f2f0;--muted:#5a5a56;--muted2:#8c8c86;
   --accent:#f97316;--accent2:#06b6d4;--success:#22c55e;--danger:#ef4444;--gold:#fbbf24;--purple:#a78bfa;
-  --nav-h:64px;
+  --nav-h:calc(64px + env(safe-area-inset-bottom,0px));
   --ff:'DM Sans',sans-serif;--ffd:'Bebas Neue',sans-serif;
 }
-body{background:var(--bg);color:var(--text);font-family:var(--ff);-webkit-tap-highlight-color:transparent}
+html{-webkit-text-size-adjust:100%}
+body{background:var(--bg);color:var(--text);font-family:var(--ff);-webkit-tap-highlight-color:transparent;overscroll-behavior-y:none}
 input,select,button{font-family:var(--ff)}
 input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
+button{touch-action:manipulation}
+button:active{transform:scale(.97)}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:4px}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
 .app{max-width:430px;margin:0 auto;min-height:100dvh;display:flex;flex-direction:column;background:var(--bg)}
-.content{flex:1;overflow-y:auto;padding-bottom:calc(var(--nav-h)+8px)}
+.content{flex:1;overflow-y:auto;padding-bottom:calc(var(--nav-h) + 8px)}
 .tab-content{padding:20px 16px 12px}
 
 /* NAV */
-.bottom-nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:430px;height:var(--nav-h);background:rgba(8,8,8,.97);border-top:1px solid var(--border);display:flex;backdrop-filter:blur(16px);z-index:100}
-.nav-btn{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;background:none;border:none;color:var(--muted);font-size:9px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;cursor:pointer;transition:color .2s;position:relative}
+.bottom-nav{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:430px;height:var(--nav-h);padding-bottom:env(safe-area-inset-bottom,0px);background:rgba(6,6,6,.92);border-top:1px solid var(--border);display:flex;backdrop-filter:blur(20px) saturate(1.4);z-index:100}
+.nav-btn{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;background:none;border:none;color:var(--muted);font-size:9px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;cursor:pointer;transition:color .2s;position:relative;min-height:48px}
 .nav-btn.active{color:var(--accent)}
-.nav-btn.active::before{content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);width:28px;height:2px;background:var(--accent);border-radius:0 0 3px 3px}
+.nav-btn.active::before{content:'';position:absolute;top:0;left:50%;transform:translateX(-50%);width:28px;height:3px;background:linear-gradient(90deg,var(--accent),var(--gold));border-radius:0 0 4px 4px;box-shadow:0 2px 10px rgba(249,115,22,.5)}
 .ai-nav-icon{display:flex;align-items:center;justify-content:center;transition:all .3s}
 .ai-nav-icon.glow{color:var(--accent);filter:drop-shadow(0 0 6px var(--accent))}
 
 /* HERO */
 .hero-header{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:20px}
-.hero-greeting{font-family:var(--ffd);font-size:46px;letter-spacing:2px;line-height:1;background:linear-gradient(135deg,var(--accent),var(--gold));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.hero-eyebrow{font-size:9px;font-weight:800;letter-spacing:2.5px;text-transform:uppercase;color:var(--muted2);margin-bottom:4px}
+.hero-greeting{font-family:var(--ffd);font-size:46px;letter-spacing:2px;line-height:1;background:linear-gradient(120deg,var(--accent) 0%,var(--gold) 50%,var(--accent) 100%);background-size:200% auto;-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;animation:heroShine 6s linear infinite}
+@keyframes heroShine{to{background-position:200% center}}
 .hero-sub{color:var(--muted2);font-size:12px;margin-top:4px;text-transform:capitalize}
 .streak-badge{display:flex;align-items:center;gap:5px;background:rgba(239,68,68,.12);color:#ef4444;border:1px solid rgba(239,68,68,.25);border-radius:20px;padding:7px 13px;font-size:14px;font-weight:800}
+
+/* WELCOME CARD */
+.welcome-card{background:linear-gradient(160deg,rgba(249,115,22,.06),transparent 60%),var(--bg2);border:1px solid var(--border);border-radius:16px;padding:20px 16px;margin-top:4px}
+.welcome-title{font-family:var(--ffd);font-size:24px;letter-spacing:1px;margin-bottom:16px}
+.welcome-pillars{display:flex;flex-direction:column;gap:14px;margin-bottom:16px}
+.wp-item{display:flex;gap:12px;align-items:flex-start}
+.wp-icon{font-size:22px;flex-shrink:0;margin-top:1px}
+.wp-name{font-weight:700;font-size:14px;margin-bottom:2px}
+.wp-desc{font-size:12px;color:var(--muted2);line-height:1.5}
+.welcome-hint{font-size:12px;color:var(--muted2);text-align:center;padding-top:12px;border-top:1px solid var(--border)}
+.welcome-hint strong{color:var(--accent)}
+
+/* QUICK LOG */
+.quicklog-btn{width:100%;background:var(--bg2);border:1px solid rgba(6,182,212,.3);border-radius:12px;padding:13px 14px;margin-bottom:16px;cursor:pointer;display:flex;align-items:center;gap:12px;text-align:left;transition:all .15s}
+.quicklog-btn:hover{background:rgba(6,182,212,.06)}
+.quicklog-btn.logged{border-color:rgba(34,197,94,.3)}
+.quicklog-icon{font-size:24px;flex-shrink:0}
+.quicklog-text{flex:1;min-width:0}
+.quicklog-title{font-size:14px;font-weight:700;color:var(--text);margin-bottom:2px}
+.quicklog-sub{font-size:11px;color:var(--muted2)}
+.quicklog-arrow{font-size:18px;color:var(--accent2);flex-shrink:0;font-weight:700}
+.ql-fields{display:flex;flex-direction:column;gap:14px;margin-bottom:14px}
+.ql-field label{display:block;font-size:12px;font-weight:700;color:var(--muted2);margin-bottom:6px}
+.ql-hint{font-size:11px;color:var(--muted2);background:rgba(6,182,212,.07);border:1px solid rgba(6,182,212,.15);border-radius:8px;padding:10px;line-height:1.5;margin-bottom:16px}
+
+/* CROSS CHART */
+.cross-card{border-color:rgba(249,115,22,.25)}
+.cross-legend{display:flex;gap:16px;margin-bottom:10px}
+.cl-item{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted2);font-weight:600}
+.cl-dot{width:14px;height:3px;border-radius:2px;display:inline-block}
+.cl-dot.dashed{background:none;border-top:2px dashed;height:0;width:14px}
+.cross-insight{display:flex;align-items:flex-start;gap:8px;margin-top:12px;font-size:12px;color:var(--text);background:var(--bg3);border-radius:8px;padding:10px 12px;line-height:1.5}
+.cross-insight span{font-size:16px;flex-shrink:0}
 
 .pr-highlight{background:linear-gradient(135deg,rgba(249,115,22,.12),rgba(251,191,36,.08));border:1px solid rgba(249,115,22,.25);border-radius:14px;padding:14px 16px;margin-bottom:16px}
 .prh-label{display:flex;align-items:center;gap:5px;font-size:10px;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--gold);margin-bottom:4px}
@@ -1615,9 +1860,9 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
 .stat-value{font-family:var(--ffd);font-size:26px;letter-spacing:1px;line-height:1}
 .stat-label{color:var(--muted);font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;margin-top:3px}
 
-.cta-btn{width:100%;padding:15px;background:var(--accent);color:#fff;border:none;border-radius:12px;font-family:var(--ffd);font-size:20px;letter-spacing:2px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:12px;transition:all .15s}
+.cta-btn{width:100%;padding:15px;background:linear-gradient(135deg,#ea580c,var(--accent));color:#fff;border:none;border-radius:14px;font-family:var(--ffd);font-size:20px;letter-spacing:2px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:10px;margin-bottom:12px;transition:all .15s;box-shadow:0 4px 18px rgba(249,115,22,.28);min-height:52px}
 .cta-btn:active{transform:scale(.97)}
-.cta-btn.success{background:var(--success)}
+.cta-btn.success{background:linear-gradient(135deg,#16a34a,var(--success));box-shadow:0 4px 18px rgba(34,197,94,.28)}
 .home-actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:24px}
 .home-action-btn{background:var(--bg2);border:1px solid var(--border);border-radius:12px;padding:14px 12px;display:flex;flex-direction:column;align-items:center;gap:7px;color:var(--text);font-size:13px;font-weight:600;cursor:pointer;transition:all .15s}
 .home-action-btn:hover{border-color:var(--accent);color:var(--accent)}
@@ -1688,7 +1933,7 @@ input[type=number]::-webkit-inner-spin-button{-webkit-appearance:none}
 
 /* FORMS */
 .field-group{display:flex;flex-direction:column;gap:8px;margin-bottom:16px}
-.text-input{width:100%;background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:11px 13px;color:var(--text);font-size:14px;outline:none;transition:border-color .15s}
+.text-input{width:100%;background:var(--bg2);border:1px solid var(--border);border-radius:10px;padding:11px 13px;color:var(--text);font-size:16px;outline:none;transition:border-color .15s}
 .text-input:focus{border-color:var(--accent)}
 .text-input.flex1{flex:1}
 select.text-input{appearance:none}
@@ -1713,7 +1958,7 @@ select.text-input{appearance:none}
 .set-done{opacity:.5}
 .set-row-pr .set-input{border-color:rgba(251,191,36,.4)!important;background:rgba(251,191,36,.06)!important}
 .set-num{font-size:13px;color:var(--muted);text-align:center;font-weight:700}
-.set-input{background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:8px 3px;color:var(--text);font-size:15px;font-weight:700;text-align:center;outline:none;width:100%;transition:border-color .15s}
+.set-input{background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:8px 3px;color:var(--text);font-size:16px;font-weight:700;text-align:center;outline:none;width:100%;transition:border-color .15s}
 .set-input:focus{border-color:var(--accent)}
 .set-done-btn{height:36px;border-radius:8px;border:2px solid var(--border);background:var(--bg3);color:var(--muted);cursor:pointer;display:flex;align-items:center;justify-content:center;transition:all .15s;width:100%}
 .set-done-btn:disabled{opacity:.3;cursor:not-allowed}
@@ -1891,7 +2136,7 @@ select.text-input{appearance:none}
 
 /* AI INPUT */
 .ai-input-row{display:flex;gap:7px;padding:7px 12px 9px;align-items:center;flex-shrink:0;border-top:1px solid var(--border);background:var(--bg2)}
-.ai-input{flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:22px;padding:10px 15px;color:var(--text);font-size:14px;outline:none;transition:border-color .15s}
+.ai-input{flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:22px;padding:10px 15px;color:var(--text);font-size:16px;outline:none;transition:border-color .15s}
 .ai-input:focus{border-color:var(--accent)}
 .ai-input::placeholder{color:var(--muted)}
 .ai-input:disabled{opacity:.5}
@@ -1907,6 +2152,14 @@ select.text-input{appearance:none}
 .mic-ring{position:absolute;inset:-5px;border-radius:50%;border:2px solid var(--accent);opacity:.5;animation:pulsering 1.2s ease-out infinite;pointer-events:none}
 @keyframes pulsering{0%{transform:scale(.9);opacity:.6}100%{transform:scale(1.4);opacity:0}}
 .ai-footer{text-align:center;font-size:10px;color:var(--muted);padding:4px 0 6px;flex-shrink:0;background:var(--bg2)}
+.ai-file-btn{width:40px;height:40px;border-radius:50%;background:var(--bg3);border:1px solid var(--border2);color:var(--accent2);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .2s;flex-shrink:0}
+.ai-file-btn:hover{background:rgba(6,182,212,.1);border-color:var(--accent2)}
+.ai-file-btn:disabled{opacity:.4;cursor:not-allowed}
+.ai-file-btn.busy{animation:pulse 1s infinite}
+.ai-file-spin{width:16px;height:16px;border:2px solid var(--accent2);border-top-color:transparent;border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.ai-quick-import{background:rgba(6,182,212,.1)!important;border-color:rgba(6,182,212,.3)!important;color:var(--accent2)!important}
+.ai-quick-import:hover{background:rgba(6,182,212,.2)!important}
 
 /* ─── HIIT MODULE ─── */
 .hiit-home-btn{border-color:rgba(239,68,68,.3)!important;color:#ef4444!important}
@@ -1990,7 +2243,7 @@ select.text-input{appearance:none}
 .hiit-timer-time{font-family:var(--ffd);font-size:52px;letter-spacing:2px;line-height:1}
 .hiit-timer-time span{font-family:var(--ff);font-size:18px}
 .hiit-timer-type{font-size:11px;font-weight:800;letter-spacing:2px;text-transform:uppercase}
-.hiit-hr-live{display:flex;align-items:center;gap:12px;border:1px solid;border-radius:10px;padding:10px 16px;margin:8px 16px;width:calc(100%-32px)}
+.hiit-hr-live{display:flex;align-items:center;gap:12px;border:1px solid;border-radius:10px;padding:10px 16px;margin:8px 16px;width:calc(100% - 32px)}
 .hiit-hr-val{font-family:var(--ffd);font-size:28px;letter-spacing:1px;line-height:1}
 .hiit-hr-target{font-size:11px;color:var(--muted2)}
 .hiit-hr-avg{margin-left:auto;font-size:12px;color:var(--muted2);font-weight:700}
